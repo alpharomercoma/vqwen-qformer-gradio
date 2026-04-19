@@ -279,37 +279,55 @@ def analyze(video_path: str | None, n_frames: int, deep: bool, progress=gr.Progr
 
 
 CSS = """
-:root { --bg: #0b0b10; }
 .gradio-container { max-width: 1100px !important; margin: 0 auto; }
 #hero {
   padding: 28px 32px;
   border-radius: 20px;
-  background: radial-gradient(circle at 20% 0%, #ff4b6e33, transparent 60%),
-              radial-gradient(circle at 100% 100%, #7c5cff33, transparent 55%),
-              linear-gradient(135deg, #15151f, #0f0f16);
-  color: #f5f5fa;
+  background: linear-gradient(135deg, #ec4899 0%, #a855f7 55%, #6366f1 100%);
+  color: #ffffff !important;
   margin-bottom: 18px;
-  border: 1px solid #2a2a38;
+  box-shadow: 0 10px 30px -12px rgba(168, 85, 247, 0.45);
 }
-#hero h1 { margin: 0 0 6px 0; font-size: 30px; letter-spacing: -0.01em; }
-#hero p  { margin: 0; opacity: 0.75; font-size: 14px; }
+#hero h1 { margin: 0 0 8px 0; font-size: 30px; letter-spacing: -0.01em; color: #ffffff !important; }
+#hero p  { margin: 0; font-size: 14px; color: rgba(255,255,255,0.9) !important; }
+#hero code {
+  background: rgba(255,255,255,0.18);
+  color: #ffffff !important;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
 .verdict-card {
   display: flex; align-items: center; gap: 18px;
-  padding: 22px 26px; border-radius: 18px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, #12121a), #11111a);
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, #2a2a38);
-  color: #f5f5fa;
+  padding: 22px 26px; border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid rgba(0,0,0,0.08);
+  border-left: 6px solid var(--accent);
+  color: #111827 !important;
+  box-shadow: 0 4px 18px -8px rgba(0,0,0,0.15);
 }
 .verdict-emoji { font-size: 54px; line-height: 1; }
 .verdict-label {
-  font-size: 28px; font-weight: 700; letter-spacing: 0.02em;
-  color: var(--accent);
+  font-size: 26px; font-weight: 700; letter-spacing: 0.02em;
+  color: var(--accent) !important;
 }
-.verdict-sub { opacity: 0.85; margin-top: 2px; font-size: 14px; }
+.verdict-sub { color: #374151 !important; margin-top: 4px; font-size: 14px; }
 .verdict-meta {
-  display: flex; gap: 18px; margin-top: 10px; font-size: 13px; opacity: 0.85;
+  display: flex; gap: 20px; margin-top: 10px; font-size: 13px; color: #6b7280 !important;
 }
-footer { display: none !important; }
+.verdict-meta b { color: #111827; }
+
+@media (prefers-color-scheme: dark) {
+  .verdict-card {
+    background: #1f2937;
+    border-color: rgba(255,255,255,0.08);
+    color: #f9fafb !important;
+  }
+  .verdict-sub { color: #d1d5db !important; }
+  .verdict-meta { color: #9ca3af !important; }
+  .verdict-meta b { color: #f9fafb; }
+}
 """
 
 THEME = gr.themes.Soft(primary_hue="pink", neutral_hue="slate")
