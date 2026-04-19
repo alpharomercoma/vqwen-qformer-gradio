@@ -229,7 +229,9 @@ CSS = """
 footer { display: none !important; }
 """
 
-with gr.Blocks(title="VQwen-QFormer · Sludge Detector", css=CSS, theme=gr.themes.Soft(primary_hue="pink", neutral_hue="slate")) as demo:
+THEME = gr.themes.Soft(primary_hue="pink", neutral_hue="slate")
+
+with gr.Blocks(title="VQwen-QFormer · Sludge Detector") as demo:
     gr.HTML(
         """
         <div id="hero">
@@ -290,4 +292,4 @@ with gr.Blocks(title="VQwen-QFormer · Sludge Detector", css=CSS, theme=gr.theme
 
 
 if __name__ == "__main__":
-    demo.queue(max_size=8).launch()
+    demo.queue(max_size=8).launch(theme=THEME, css=CSS)
