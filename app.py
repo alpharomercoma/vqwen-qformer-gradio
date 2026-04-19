@@ -8,8 +8,6 @@ for the yes/no prompt, and deeper analysis is opt-in.
 
 from __future__ import annotations
 
-import os
-import tempfile
 from dataclasses import dataclass
 from typing import List, Tuple
 
@@ -183,16 +181,16 @@ def analyze(video_path: str | None, n_frames: int, deep: bool, progress=gr.Progr
         for r in results
     ]
 
-    table_rows = []
-    for r in results:
-        row = [
+    table_rows = [
+        [
             f"{r.timestamp:.2f}s",
             "🥴 sludge" if r.is_sludge else "✅ non-sludge",
             r.verdict,
+            r.layout or "—",
+            r.description or "—",
         ]
-        if deep:
-            row.extend([r.layout or "—", r.description or "—"])
-        table_rows.append(row)
+        for r in results
+    ]
 
     return verdict_html, gallery, table_rows
 
@@ -272,13 +270,6 @@ with gr.Blocks(title="VQwen-QFormer · Sludge Detector", css=CSS, theme=gr.theme
             wrap=True,
             interactive=False,
         )
-
-    gr.Examples(
-        examples=[],
-        inputs=[video, n_frames, deep],
-        label="",
-        visible=False,
-    )
 
     gr.Markdown(
         f"""
