@@ -13,6 +13,7 @@ from typing import List, Tuple
 
 import cv2
 import gradio as gr
+import imageio.v3 as iio
 import numpy as np
 import torch
 from PIL import Image
@@ -79,22 +80,66 @@ def _ask(image: Image.Image, question: str, max_new_tokens: int) -> str:
     return PROCESSOR.decode(gen, skip_special_tokens=True).strip()
 
 
-def _sample_frames(video_path: str, n_frames: int) -> List[Tuple[int, float, Image.Image]]:
+def _pick_indices(total: int, n_frames: int) -> List[int]:
+    n = max(1, min(n_frames, MAX_FRAMES, total))
+    if n == 1:
+        return [total // 2]
+    return [int(i) for i in np.linspace(0, total - 1, n, dtype=int)]
+
+
+def _read_imageio(video_path: str, n_frames: int) -> List[Tuple[int, float, Image.Image]]:
+    """Primary reader: imageio + PyAV (ffmpeg-backed, wide codec support)."""
+    fps = 30.0
+    n_total = 0
+    for plugin in ("pyav", "FFMPEG", None):
+        try:
+            meta = iio.immeta(video_path, plugin=plugin) if plugin else iio.immeta(video_path)
+            fps = float(meta.get("fps") or meta.get("fps ") or 30.0)
+            duration = float(meta.get("duration") or 0.0)
+            n_total = int(duration * fps) if duration > 0 else 0
+            break
+        except Exception:
+            continue
+
+    # Stream-count if metadata is unreliable.
+    if n_total <= 0:
+        all_frames = list(iio.imiter(video_path))
+        n_total = len(all_frames)
+        if n_total == 0:
+            return []
+        indices = _pick_indices(n_total, n_frames)
+        return [
+            (i, i / fps, Image.fromarray(all_frames[i]))
+            for i in indices
+        ]
+
+    indices = _pick_indices(n_total, n_frames)
+    out: List[Tuple[int, float, Image.Image]] = []
+    for idx in indices:
+        arr = None
+        for plugin in ("pyav", "FFMPEG", None):
+            try:
+                arr = iio.imread(video_path, index=idx, plugin=plugin) if plugin else iio.imread(video_path, index=idx)
+                break
+            except Exception:
+                continue
+        if arr is None:
+            continue
+        out.append((idx, idx / fps, Image.fromarray(arr)))
+    return out
+
+
+def _read_cv2(video_path: str, n_frames: int) -> List[Tuple[int, float, Image.Image]]:
+    """Fallback reader: OpenCV."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        raise gr.Error("Could not open video. Try MP4/WebM/MOV.")
+        return []
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     if total <= 0:
         cap.release()
-        raise gr.Error("Video has no readable frames.")
-
-    n_frames = max(1, min(n_frames, MAX_FRAMES, total))
-    if n_frames == 1:
-        indices = [total // 2]
-    else:
-        indices = np.linspace(0, total - 1, n_frames, dtype=int).tolist()
-
+        return []
+    indices = _pick_indices(total, n_frames)
     out: List[Tuple[int, float, Image.Image]] = []
     for idx in indices:
         cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
@@ -104,10 +149,22 @@ def _sample_frames(video_path: str, n_frames: int) -> List[Tuple[int, float, Ima
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         out.append((int(idx), float(idx) / fps, Image.fromarray(frame)))
     cap.release()
-
-    if not out:
-        raise gr.Error("Failed to decode any frames from the video.")
     return out
+
+
+def _sample_frames(video_path: str, n_frames: int) -> List[Tuple[int, float, Image.Image]]:
+    errors = []
+    for reader in (_read_imageio, _read_cv2):
+        try:
+            out = reader(video_path, n_frames)
+            if out:
+                return out
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{reader.__name__}: {e}")
+    detail = " | ".join(errors) if errors else "no frames decoded"
+    raise gr.Error(
+        f"Couldn't decode the video ({detail}). Try re-encoding to MP4 (H.264 + AAC)."
+    )
 
 
 def analyze(video_path: str | None, n_frames: int, deep: bool, progress=gr.Progress()):
