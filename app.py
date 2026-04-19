@@ -29,12 +29,38 @@ PROMPT_DESCRIBE = "Describe this frame."
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.bfloat16  # matches the weights on disk; keeps memory ~10 GB
 
+# Shipped alongside the model as chat_template.jinja / processor_config.json,
+# but older Blip2Processor doesn't auto-populate self.chat_template on load,
+# so we inline it here as a fallback. 32 <image> tokens = Q-Former query count.
+CHAT_TEMPLATE = (
+    "{%- for message in messages -%}"
+    "{{- '<|im_start|>' + message['role'] + '\n' -}}"
+    "{%- if message['content'] is string -%}"
+    "{{- message['content'] -}}"
+    "{%- else -%}"
+    "{%- for item in message['content'] -%}"
+    "{%- if item['type'] == 'image' -%}"
+    + ("<image>" * 32) + "\n"
+    "{%- elif item['type'] == 'text' -%}"
+    "{{- item['text'] -}}"
+    "{%- endif -%}"
+    "{%- endfor -%}"
+    "{%- endif -%}"
+    "{{- '<|im_end|>\n' -}}"
+    "{%- endfor -%}"
+    "{%- if add_generation_prompt -%}"
+    "{{- '<|im_start|>assistant\n' -}}"
+    "{%- endif -%}"
+)
+
 
 def _load():
     model = Blip2ForConditionalGeneration.from_pretrained(
         MODEL_ID, dtype=DTYPE, low_cpu_mem_usage=True
     ).to(DEVICE).eval()
     processor = AutoProcessor.from_pretrained(MODEL_ID)
+    if not getattr(processor, "chat_template", None):
+        processor.chat_template = CHAT_TEMPLATE
     return model, processor
 
 
