@@ -11,7 +11,7 @@ license: apache-2.0
 models:
   - alpharomercoma/vqwen-qformer-tiktok-v2
   - openai/whisper-base
-short_description: Detect internet brain-rot "sludge" videos from audio + a frame.
+short_description: Detect TikTok-style "sludge" videos (multi-pane brain-rot)
 ---
 
 # 🥴 VQwen-QFormer Sludge Detector
