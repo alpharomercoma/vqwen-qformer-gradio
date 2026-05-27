@@ -1,14 +1,23 @@
-"""Gradio Space for alpharomercoma/vqwen-qformer-tiktok.
+"""Gradio Space for alpharomercoma/vqwen-qformer-tiktok-v2.
 
-Takes a video, samples frames, and classifies each as sludge vs non-sludge
-using the VQwen-QFormer (BLIP-2 + Qwen3-4B) model. CPU-friendly: weights
-load in bfloat16, generation uses greedy decoding with a tiny token budget
-for the yes/no prompt, and deeper analysis is opt-in.
+Takes a video, transcribes its audio with Whisper, samples a frame, and
+classifies it as sludge vs non-sludge using the VQwen-QFormer v2 model
+(BLIP-2 vision + Q-Former + frozen Linear projector + Qwen3-4B LoRA, with
+the audio transcript concatenated into the prompt).
+
+CPU-friendly: weights load in bfloat16; generation uses greedy decoding
+with a tiny token budget for the yes/no prompt; Whisper is lazy-loaded on
+first call to keep Space cold-start under HF's health-check budget;
+deeper analysis (layout + description) is opt-in.
 """
 
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Tuple
 
 import cv2
@@ -17,10 +26,12 @@ import imageio.v3 as iio
 import numpy as np
 import torch
 from PIL import Image
-from transformers import AutoProcessor, Blip2ForConditionalGeneration
+from transformers import AutoProcessor, Blip2ForConditionalGeneration, pipeline
 
-MODEL_ID = "alpharomercoma/vqwen-qformer-tiktok"
+MODEL_ID = "alpharomercoma/vqwen-qformer-tiktok-v2"
+ASR_MODEL_ID = "openai/whisper-base"  # 74M params, ~290 MB; CPU-friendly.
 MAX_FRAMES = 3
+MAX_TRANSCRIPT_CHARS = 600  # mirrors training-time truncation in vqwen-qformer/scripts/12_build_tiktok_convs_v2.py
 
 PROMPT_CLASSIFY = "Is this sludge content? Answer yes or no."
 PROMPT_LAYOUT = "What layout type is shown?"
@@ -69,6 +80,71 @@ MODEL, PROCESSOR = _load()
 print("[startup] model ready")
 
 
+# Whisper is lazy-loaded on first call so the Space's cold-start stays under
+# Hugging Face's ~30s health-check budget. Cost: first analyze() pays the
+# ~10s ASR weight load once; subsequent calls reuse the loaded pipeline.
+_ASR = None
+
+
+def _get_asr():
+    global _ASR
+    if _ASR is None:
+        print(f"[asr] loading {ASR_MODEL_ID} (first call only)...")
+        _ASR = pipeline(
+            "automatic-speech-recognition",
+            model=ASR_MODEL_ID,
+            device=-1,  # CPU
+        )
+        print("[asr] ready")
+    return _ASR
+
+
+def _extract_audio(video_path: str) -> Path | None:
+    """Dump 16 kHz mono WAV to a temp file. Returns None if the video has no
+    audio stream (silent video — not an error, just transcribe-as-empty)."""
+    out = Path(tempfile.mkstemp(suffix=".wav")[1])
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000",
+         "-f", "wav", str(out)],
+        capture_output=True,
+    )
+    if r.returncode != 0 or not out.exists() or out.stat().st_size == 0:
+        return None
+    return out
+
+
+def _truncate(t: str, n: int = MAX_TRANSCRIPT_CHARS) -> str:
+    """Char-level, whitespace-aware truncation with ellipsis suffix.
+    Mirrors vqwen-qformer/scripts/12_build_tiktok_convs_v2.py:122-126 exactly
+    so inference prompt shape matches what the model saw during training."""
+    if len(t) <= n:
+        return t
+    cut = t.rfind(" ", 0, n)
+    return (t[:cut] if cut > 0 else t[:n]).rstrip() + "…"
+
+
+def _get_transcript(video_path: str) -> str:
+    """End-to-end: video -> audio -> Whisper -> truncated text. Returns ""
+    on any failure (silent video, transcription crash, etc.); empty
+    transcript triggers vision-only fallback in _ask, matching training-time
+    behavior for transcript-less samples."""
+    wav = _extract_audio(video_path)
+    if wav is None:
+        return ""
+    try:
+        result = _get_asr()(str(wav))
+        text = (result.get("text") if isinstance(result, dict) else "") or ""
+        return _truncate(text.strip())
+    except Exception as e:  # noqa: BLE001
+        print(f"[asr] transcription failed: {e}")
+        return ""
+    finally:
+        try:
+            wav.unlink()
+        except OSError:
+            pass
+
+
 @dataclass
 class FrameResult:
     index: int
@@ -80,16 +156,19 @@ class FrameResult:
     description: str | None
 
 
-def _ask(image: Image.Image, question: str, max_new_tokens: int) -> str:
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image"},
-                {"type": "text", "text": question},
-            ],
-        }
-    ]
+def _ask(image: Image.Image, question: str, max_new_tokens: int, transcript: str = "") -> str:
+    # Build the user turn: when a transcript is present, prepend an
+    # "Audio transcript: <text>" text block BEFORE the image, then the
+    # question. This matches the training-time prompt layout from
+    # vqwen-qformer/scripts/12_build_tiktok_convs_v2.py (the v2 model was
+    # trained on prompts shaped this way; vision-only inference produces
+    # measurably worse predictions).
+    content: list[dict] = []
+    if transcript:
+        content.append({"type": "text", "text": f"Audio transcript: {transcript}"})
+    content.append({"type": "image"})
+    content.append({"type": "text", "text": question})
+    messages = [{"role": "user", "content": content}]
     prompt = PROCESSOR.apply_chat_template(
         messages, add_generation_prompt=True, tokenize=False
     )
@@ -197,7 +276,10 @@ def analyze(video_path: str | None, n_frames: int, deep: bool, progress=gr.Progr
     if not video_path:
         raise gr.Error("Please upload a video first.")
 
-    progress(0.05, desc="Sampling frames")
+    progress(0.02, desc="Transcribing audio")
+    transcript = _get_transcript(video_path)
+
+    progress(0.10, desc="Sampling frames")
     samples = _sample_frames(video_path, int(n_frames))
 
     results: List[FrameResult] = []
@@ -207,17 +289,17 @@ def analyze(video_path: str | None, n_frames: int, deep: bool, progress=gr.Progr
     for idx, ts, img in samples:
         step += 1
         progress(step / (total_steps + 1), desc=f"Classifying frame {len(results) + 1}/{len(samples)}")
-        verdict = _ask(img, PROMPT_CLASSIFY, max_new_tokens=6)
+        verdict = _ask(img, PROMPT_CLASSIFY, max_new_tokens=6, transcript=transcript)
         is_sludge = verdict.lower().lstrip().startswith("yes")
 
         layout = description = None
         if deep:
             step += 1
             progress(step / (total_steps + 1), desc=f"Layout for frame {len(results) + 1}")
-            layout = _ask(img, PROMPT_LAYOUT, max_new_tokens=16)
+            layout = _ask(img, PROMPT_LAYOUT, max_new_tokens=16, transcript=transcript)
             step += 1
             progress(step / (total_steps + 1), desc=f"Describing frame {len(results) + 1}")
-            description = _ask(img, PROMPT_DESCRIBE, max_new_tokens=96)
+            description = _ask(img, PROMPT_DESCRIBE, max_new_tokens=96, transcript=transcript)
 
         results.append(
             FrameResult(
@@ -337,9 +419,11 @@ with gr.Blocks(title="VQwen-QFormer · Sludge Detector") as demo:
         """
         <div id="hero">
           <h1>🥴 Sludge Detector</h1>
-          <p>Upload a short video. We sample a few frames and ask
-          <code>vqwen-qformer-tiktok</code> whether it's internet brain-rot sludge —
-          multiple unrelated things playing at once — or a single coherent scene.</p>
+          <p>Upload a short video. We transcribe the audio with Whisper, sample
+          a frame, and ask <code>vqwen-qformer-tiktok-v2</code> whether the
+          clip is internet brain-rot sludge — multiple unrelated streams
+          playing at once — or a single coherent scene.
+          <br><b>Expect ~3-5 minutes per video on the free CPU tier.</b></p>
         </div>
         """
     )
@@ -350,12 +434,12 @@ with gr.Blocks(title="VQwen-QFormer · Sludge Detector") as demo:
             n_frames = gr.Slider(
                 minimum=1, maximum=MAX_FRAMES, step=1, value=1,
                 label="Frames to sample",
-                info="More frames = more reliable vote, but slower on CPU.",
+                info="More frames = more reliable vote, but each frame adds ~30-90s on CPU.",
             )
             deep = gr.Checkbox(
                 label="Deep analysis (layout + description per frame)",
                 value=False,
-                info="Adds two extra generations per frame. Expect minutes on CPU.",
+                info="Adds two extra generations per frame. Expect many minutes on CPU.",
             )
             run_btn = gr.Button("Analyze", variant="primary", size="lg")
 
@@ -378,9 +462,12 @@ with gr.Blocks(title="VQwen-QFormer · Sludge Detector") as demo:
         f"""
         <small>
         Model: <a href="https://huggingface.co/{MODEL_ID}" target="_blank"><code>{MODEL_ID}</code></a>
-        · BLIP-2 vision tower + Qwen3-4B LLM with LoRA merged ·
+        · EVA-CLIP-G/14 + Q-Former + frozen Linear projector + Qwen3-4B (LoRA merged) ·
+        Audio transcription: <a href="https://huggingface.co/{ASR_MODEL_ID}" target="_blank"><code>{ASR_MODEL_ID}</code></a>
+        (smaller than the Whisper-V3-Turbo used at training time; trade-off for CPU latency) ·
         Running on <b>{DEVICE.upper()}</b> in {str(DTYPE).split('.')[-1]}.
-        CPU inference for a 5B model is slow — expect ~30–90s per frame.
+        End-to-end on free CPU: ~3-5 min per video (audio + 1 frame × ~30-90s of generation).
+        For snappier inference, <a href="https://huggingface.co/spaces/alpharomercoma/vqwen-qformer/discussions" target="_blank">duplicate this Space</a> and select <b>ZeroGPU</b> hardware.
         </small>
         """
     )
