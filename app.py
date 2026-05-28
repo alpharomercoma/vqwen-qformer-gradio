@@ -463,8 +463,7 @@ with gr.Blocks(title="VQwen-QFormer · Sludge Detector") as demo:
         <small>
         Model: <a href="https://huggingface.co/{MODEL_ID}" target="_blank"><code>{MODEL_ID}</code></a>
         · EVA-CLIP-G/14 + Q-Former + frozen Linear projector + Qwen3-4B (LoRA merged) ·
-        Audio transcription: <a href="https://huggingface.co/{ASR_MODEL_ID}" target="_blank"><code>{ASR_MODEL_ID}</code></a>
-        (smaller than the Whisper-V3-Turbo used at training time; trade-off for CPU latency) ·
+        Audio transcription: <a href="https://huggingface.co/{ASR_MODEL_ID}" target="_blank"><code>{ASR_MODEL_ID}</code></a> ·
         Running on <b>{DEVICE.upper()}</b> in {str(DTYPE).split('.')[-1]}.
         End-to-end on free CPU: ~3-5 min per video (audio + 1 frame × ~30-90s of generation).
         For snappier inference, <a href="https://huggingface.co/spaces/alpharomercoma/vqwen-qformer/discussions" target="_blank">duplicate this Space</a> and select <b>ZeroGPU</b> hardware.
