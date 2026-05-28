@@ -357,7 +357,12 @@ def analyze(video_path: str | None, n_frames: int, deep: bool, progress=gr.Progr
         for r in results
     ]
 
-    return verdict_html, gallery, table_rows
+    transcript_display = (
+        transcript if transcript
+        else "(No speech detected by Whisper — the verdict above is vision-only.)"
+    )
+
+    return verdict_html, gallery, transcript_display, table_rows
 
 
 CSS = """
@@ -449,6 +454,11 @@ with gr.Blocks(title="VQwen-QFormer · Sludge Detector") as demo:
                 label="Sampled frames",
                 columns=3, height=220, object_fit="cover", show_label=True,
             )
+            transcript_out = gr.Textbox(
+                label="Audio transcript (Whisper)",
+                placeholder="Whisper transcript will appear here after analysis.",
+                lines=4, max_lines=10, show_copy_button=True, interactive=False,
+            )
 
     with gr.Accordion("Per-frame details", open=False):
         table = gr.Dataframe(
@@ -474,7 +484,7 @@ with gr.Blocks(title="VQwen-QFormer · Sludge Detector") as demo:
     run_btn.click(
         fn=analyze,
         inputs=[video, n_frames, deep],
-        outputs=[verdict, gallery, table],
+        outputs=[verdict, gallery, transcript_out, table],
     )
 
 
