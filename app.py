@@ -457,7 +457,7 @@ with gr.Blocks(title="VQwen-QFormer · Sludge Detector") as demo:
             transcript_out = gr.Textbox(
                 label="Audio transcript (Whisper)",
                 placeholder="Whisper transcript will appear here after analysis.",
-                lines=4, max_lines=10, show_copy_button=True, interactive=False,
+                lines=4, max_lines=10, interactive=False,
             )
 
     with gr.Accordion("Per-frame details", open=False):
